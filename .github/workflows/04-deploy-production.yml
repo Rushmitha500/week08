@@ -1,6 +1,13 @@
 name: 04 - Deploy to Production
 
 on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Staging-tested image SHA"
+        required: true
+        type: string
+
   workflow_dispatch:
     inputs:
       image_tag:
@@ -17,8 +24,10 @@ jobs:
       name: production
 
     steps:
-      - name: Checkout repository
+      - name: Checkout tested commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.image_tag }}
 
       - name: Login to Azure
         uses: azure/login@v3
