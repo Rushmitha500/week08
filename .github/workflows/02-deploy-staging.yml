@@ -149,3 +149,51 @@ jobs:
           kubectl get pods -n staging
           kubectl get services -n staging
           kubectl get pvc -n staging
+
+  verify-staging:
+    name: Verify Staging Before Production
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v3
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        env:
+          AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP }}
+          AKS_CLUSTER_NAME: ${{ vars.AKS_CLUSTER_NAME }}
+        run: |
+          az aks get-credentials --resource-group "$AKS_RESOURCE_GROUP" --name "$AKS_CLUSTER_NAME" --overwrite-existing
+
+      - name: Verify staging frontend
+        env:
+          EXPECTED_IMAGE: ${{ vars.ACR_LOGIN_SERVER }}/koalatech-frontend:${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_IMAGE=$(kubectl get deployment frontend -n staging -o jsonpath='{.spec.template.spec.containers[?(@.name=="frontend")].image}')
+          test "$ACTUAL_IMAGE" = "$EXPECTED_IMAGE"
+
+          for attempt in {1..30}; do
+            FRONTEND_IP=$(kubectl get service frontend -n staging -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            if [ -n "$FRONTEND_IP" ]; then
+              curl --fail --retry 10 --retry-delay 5 --retry-connrefused --connect-timeout 10 --max-time 30 "http://$FRONTEND_IP"
+              echo "Staging verification passed."
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "Staging frontend IP was not assigned."
+          exit 1
+
+  promote-production:
+    name: Automatically Deploy Production
+    needs: verify-staging
+    uses: ./.github/workflows/04-deploy-production.yml
+    with:
+      image_tag: ${{ github.event.workflow_run.head_sha }}
+    secrets: inherit
